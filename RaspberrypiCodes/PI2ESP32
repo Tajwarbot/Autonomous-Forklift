@@ -1,0 +1,73 @@
+import cv2
+from pyzbar.pyzbar import decode
+import numpy as np
+import socket
+import time
+
+# CHANGE THIS after checking ESP32 Serial Monitor
+ESP32_IP = "192.168.1.50"
+PORT = 1234
+
+# ---------- TCP CONNECT ----------
+def connect():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((ESP32_IP, PORT))
+    return s
+
+client = connect()
+
+# ---------- CAMERA ----------
+cap = cv2.VideoCapture(0)
+
+last_data = None
+
+print("QR → ESP32 WiFi system started")
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        continue
+
+    codes = decode(frame)
+
+    for code in codes:
+        data = code.data.decode("utf-8")
+
+        # avoid spam
+        if data != last_data:
+            print("Sending:", data)
+
+            try:
+                client.sendall((data + "\n").encode())
+                response = client.recv(1024).decode().strip()
+                print("ESP32:", response)
+
+            except Exception as e:
+                print("Reconnecting...", e)
+                try:
+                    client.close()
+                except:
+                    pass
+                time.sleep(1)
+                client = connect()
+
+            last_data = data
+
+        # draw QR box
+        pts = np.array([p for p in code.polygon], np.int32)
+        pts = pts.reshape((-1, 1, 2))
+        cv2.polylines(frame, [pts], True, (0, 255, 0), 2)
+
+        x, y, w, h = code.rect
+        cv2.putText(frame, data, (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (0, 255, 255), 2)
+
+    cv2.imshow("QR Scanner", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break
+
+cap.release()
+client.close()
+cv2.destroyAllWindows()
