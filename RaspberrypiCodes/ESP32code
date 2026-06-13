@@ -1,0 +1,81 @@
+#include <WiFi.h>
+
+const char* ssid = "WIFINAME";
+const char* password = "PASS";
+
+WiFiServer server(1234);
+WiFiClient client;
+
+String buffer = "";
+unsigned long lastClientTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println("\nESP32 BOOT");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nCONNECTED");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+  server.begin();
+  Serial.println("TCP SERVER STARTED on port 1234");
+}
+
+void loop() {
+
+  // ---------- Handle new client ----------
+  if (!client || !client.connected()) {
+    client = server.available();
+
+    if (client) {
+      Serial.println("Client connected");
+      buffer = "";
+    }
+  }
+
+  // ---------- Read incoming data ----------
+  if (client && client.connected()) {
+
+    while (client.available()) {
+      char c = client.read();
+
+      if (c == '\n') {
+
+        buffer.trim();
+
+        if (buffer.length() > 0) {
+          Serial.print("QR RECEIVED: ");
+          Serial.println(buffer);
+
+          // send ACK back to Pi (IMPORTANT for your recv())
+          client.println("ACK: " + buffer);
+        }
+
+        buffer = "";
+
+      } else {
+        buffer += c;
+      }
+    }
+
+    lastClientTime = millis();
+  }
+
+  // ---------- timeout cleanup (prevents stuck client) ----------
+  if (client && !client.connected() && millis() - lastClientTime > 5000) {
+    Serial.println("Client timeout/reset");
+    client.stop();
+  }
+}
