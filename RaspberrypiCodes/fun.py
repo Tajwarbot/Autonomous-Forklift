@@ -4,9 +4,6 @@ import numpy as np
 import serial
 import serial.tools.list_ports
 import time
-import subprocess
-import shutil
-from pathlib import Path
 
 
 # ================= SERIAL SETTINGS =================
@@ -15,56 +12,11 @@ BAUD_RATE = 9600
 SEND_INTERVAL = 0.2
 
 
-# ================= SOUND SETTINGS =================
-
-# Put qr_success.wav inside the Raspberry Pi user's home folder
-SOUND_FILE = Path.home() / "qr_success.wav"
+# ================= QR RESET SETTINGS =================
 
 # The same QR must disappear for this long before it can
-# produce another success sound.
+# produce another announcement.
 QR_RESET_DELAY = 1.0
-
-# Try these sound players in order
-AUDIO_PLAYER = None
-
-for player in ["paplay", "pw-play", "aplay"]:
-    if shutil.which(player):
-        AUDIO_PLAYER = player
-        break
-
-
-sound_process = None
-
-
-def play_success_sound():
-    """
-    Plays the QR success sound without blocking the main program.
-    """
-
-    global sound_process
-
-    if not SOUND_FILE.exists():
-        print(f"Sound file not found: {SOUND_FILE}")
-        return
-
-    if AUDIO_PLAYER is None:
-        print("No compatible audio player found.")
-        print("Install paplay, pw-play, or aplay.")
-        return
-
-    # Do not start another sound while the previous sound is playing
-    if sound_process is not None and sound_process.poll() is None:
-        return
-
-    try:
-        sound_process = subprocess.Popen(
-            [AUDIO_PLAYER, str(SOUND_FILE)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-
-    except Exception as error:
-        print("Sound playback error:", error)
 
 
 # ================= ARDUINO CONNECTION =================
@@ -122,8 +74,6 @@ if not camera.isOpened():
 
 
 print("QR → Arduino system started")
-print("Audio player:", AUDIO_PLAYER)
-print("Success sound:", SOUND_FILE)
 
 
 # ================= PROGRAM VARIABLES =================
@@ -132,7 +82,7 @@ current_direction = None
 
 last_send = 0.0
 
-# Used to prevent continuous sound while one QR remains visible
+# Used to prevent continuous announcement while one QR remains visible
 last_announced_direction = None
 last_valid_qr_time = 0.0
 
@@ -171,7 +121,7 @@ try:
                 last_valid_qr_time = time.monotonic()
 
 
-                # Play sound only when:
+                # Announce only when:
                 # 1. A new valid QR appears, or
                 # 2. The direction changes from l to r or r to l
                 if data != last_announced_direction:
@@ -182,8 +132,6 @@ try:
                     elif data == "r":
                         print("QR detected successfully: RIGHT")
 
-
-                    play_success_sound()
 
                     last_announced_direction = data
 
@@ -226,7 +174,7 @@ try:
             )
 
 
-        # Reset the sound lock after the QR disappears
+        # Reset the announcement lock after the QR disappears
         if (
             not valid_qr_visible
             and last_announced_direction is not None
