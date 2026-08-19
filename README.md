@@ -92,14 +92,17 @@ The firmware runs continuously until the robot is stopped or powered off; there 
 ## Suggested track layout
 
 ```text
-                 LEFT DROP STATION
-                        |
-                        |
-RIGHT DROP STATION -----+----- LEFT/RIGHT BRANCH
-                        |
+LEFT DROP STATION                       RIGHT DROP STATION
+        │                                        │
+        │                                        │
+        └────────────────┬───────────────────────┘
+                         │
+                         │
                     T-JUNCTION
-                        |
-                        |
+                         │
+                         │
+                         │
+                         │
                   PICKUP / HOME
 ```
 
