@@ -580,33 +580,6 @@ The current tested firmware does **not** implement certified obstacle avoidance,
 
 ---
 
-## Known limitations
-
-- Navigation is line-guided rather than map-based.
-- Route selection currently supports only `l` and `r`.
-- The station detector depends strongly on track geometry and IR calibration.
-- QR decoding assumes the box is visible to the camera at the pickup station.
-- The current Pi script uses a desktop OpenCV window and is not headless by default.
-- Arduino acknowledgements are transmitted but not yet verified by the Pi program.
-- No production-grade obstacle detection or emergency-stop system is implemented in the current control code.
-
----
-
-## Recommended next improvements
-
-1. Add ACK-based serial handshaking so the Pi knows the Arduino received the route.
-2. Convert the Arduino mission logic into an explicit finite-state machine.
-3. Add a dedicated emergency-stop input.
-4. Add obstacle detection only after documenting its electrical and software integration.
-5. Add final mechanical drawings with dimensions and tolerances.
-6. Publish exact track dimensions and station/junction geometry.
-7. Include ready-to-print `l` and `r` QR files.
-8. Add a short demonstration GIF near the top of this README.
-9. Add automated Raspberry Pi startup with a `systemd` service after the basic build is stable.
-10. Tag known-good releases so newcomers do not accidentally use experimental firmware.
-
----
-
 ## Acknowledgements
 
 Built as an educational mechatronics and autonomous material-handling project using Raspberry Pi, Arduino, computer vision, embedded control, line sensing, and differential-drive motion.
