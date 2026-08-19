@@ -638,36 +638,6 @@ The current tested firmware does **not** implement certified obstacle avoidance,
 
 ---
 
-## Contributing
-
-Issues and pull requests are welcome. When reporting a hardware or navigation problem, include:
-
-- Arduino firmware version/commit
-- Raspberry Pi script version/commit
-- Motor and battery details
-- Sensor-array model
-- Track photo or dimensions
-- Serial Monitor output
-- Raspberry Pi terminal output
-- Short video of the failure when possible
-
-Keep experimental firmware in a separate development branch instead of replacing the last known-good build on `main`.
-
----
-
-## License
-
-A repository is not fully open source until its reuse terms are explicit. Add a `LICENSE` file before the public release.
-
-A practical option is to license the software separately from the hardware/CAD files, for example:
-
-- Software: MIT License
-- Hardware/CAD: CERN Open Hardware Licence Version 2 – Permissive
-
-Choose the license you actually want before adding license badges or declaring those terms in the repository.
-
----
-
 ## Acknowledgements
 
 Built as an educational mechatronics and autonomous material-handling project using Raspberry Pi, Arduino, computer vision, embedded control, line sensing, and differential-drive motion.
