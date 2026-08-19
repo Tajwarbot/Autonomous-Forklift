@@ -1,6 +1,6 @@
 # Vision-Guided Autonomous Forklift
 
-A student-built autonomous material-handling robot that follows a guided line, picks up a box, reads a QR route command with a Raspberry Pi, selects the correct branch at a T-junction, delivers the box, and returns to the pickup station for the next cycle.
+A student-built autonomous material-handling robot that follows a guided line, picks up a box, reads a QR route command with a Raspberry Pi, selects the correct branch at a T-junction, delivers the[...]
 
 > **Project status:** working educational prototype for a controlled track. It is not an industrial forklift, safety-rated AMR, or certified material-handling system.
 
@@ -112,39 +112,13 @@ For the current sensor logic, the track geometry matters:
 - Full T-junction region: all six sensors can become active.
 - Pickup/drop station: all six sensors read the station background long enough to trigger the station routine.
 
-The current firmware treats an all-clear sensor condition as a station after approximately 350 ms, so a completely lost line can also resemble a station. Keep the station geometry consistent and test the track before running at full speed.
+The current firmware treats an all-clear sensor condition as a station after approximately 350 ms, so a completely lost line can also resemble a station. Keep the station geometry consistent and [...]
 
 ---
 
 ## Electrical architecture
 
-```mermaid
-flowchart LR
-    BAT[3S LiPo\n10.5-12.6 V] --> FUSE[Inline fuse]
-
-    FUSE --> LDRV[Left BTS7960]
-    FUSE --> RDRV[Right BTS7960]
-    LDRV --> LMO[2 × left motors in parallel]
-    RDRV --> RMO[2 × right motors in parallel]
-
-    FUSE --> BUCK1[XL4015 step-down\n5.15 V]
-    BUCK1 --> PI[Raspberry Pi 4B\nUSB-C power]
-
-    FUSE --> BUCK2[LM2596 step-down\n5.0 V]
-    BUCK2 --> LOGIC[5 V logic / servo rail]
-    LOGIC --> MEGA[Arduino Mega 2560]
-    LOGIC --> SERVO[Forklift servo]
-
-    CAM[USB webcam] --> PI
-    IR[6-channel IR array] --> MEGA
-
-    PI -- "GPIO14 TXD, header pin 8 → Mega RX1 D19" --> MEGA
-    MEGA -- "TX1 D18 → voltage divider → Pi GPIO15 RXD, header pin 10" --> PI
-
-    MEGA --> LDRV
-    MEGA --> RDRV
-    MEGA --> SERVO
-```
+![Autonomous Forklift Circuit Diagram](Proposal/circuit diagram.png)
 
 ### Detailed circuit diagram
 
@@ -152,11 +126,11 @@ flowchart LR
 ![Autonomous Forklift Circuit Diagram](Proposal/circuit diagram.png)
 ```
 
-**Important:** the circuit diagram must match the firmware. In the current Arduino code, the fork servo signal is **D5**, while **D3** is the push button. Do not publish a schematic that labels the servo as D3.
+**Important:** the circuit diagram must match the firmware. In the current Arduino code, the fork servo signal is **D5**, while **D3** is the push button. Do not publish a schematic that labels the se[...] 
 
 ### Power notes
 
-The current design uses separate regulated positive rails for the Raspberry Pi and 5 V logic/servo supply. Do not tie the **5.15 V** and **5.0 V** positive outputs together. A common ground between the Raspberry Pi, Arduino, motor-driver logic, sensors, and power system is required for UART and control signals.
+The current design uses separate regulated positive rails for the Raspberry Pi and 5 V logic/servo supply. Do not tie the **5.15 V** and **5.0 V** positive outputs together. A common ground betwe[...]
 
 The Arduino Mega TX pin is a 5 V logic output. Do not connect Mega TX1 directly to the Raspberry Pi RX pin; use the voltage divider or a suitable logic-level shifter shown in the schematic.
 
@@ -246,7 +220,7 @@ Autonomous-Forklift/
     └── autonomous_material_handling_robot_proposal_fixed.pdf
 ```
 
-This layout separates the tested firmware, Raspberry Pi software, documentation, hardware files, QR assets, and demonstration media so a new builder can find each part without searching through experimental versions.
+This layout separates the tested firmware, Raspberry Pi software, documentation, hardware files, QR assets, and demonstration media so a new builder can find each part without searching through e[...]
 
 ---
 
@@ -265,7 +239,7 @@ forklift.write(0);    // fork up
 
 Before powering the servo, verify that these angles do not force the linkage beyond its mechanical limits.
 
-Mount the six IR sensors at the front/bottom of the robot with consistent spacing and height. Record the final sensor height and spacing in `hardware/` so other builders can reproduce the same behavior.
+Mount the six IR sensors at the front/bottom of the robot with consistent spacing and height. Record the final sensor height and spacing in `hardware/` so other builders can reproduce the same be[...]
 
 ---
 
