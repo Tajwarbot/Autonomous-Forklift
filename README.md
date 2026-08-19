@@ -1,741 +1,670 @@
 # Vision-Guided Autonomous Forklift
 
-This repository contains a mechatronics project for a **vision-guided autonomous material handling robot** (student prototype) that follows a guided path, classifies product routing via QR codes, and delivers to specified stations.
+A student-built autonomous material-handling robot that follows a guided line, picks up a box, reads a QR route command with a Raspberry Pi, selects the correct branch at a T-junction, delivers the box, and returns to the pickup station for the next cycle.
 
-## Project Overview
+> **Project status:** working educational prototype for a controlled track. It is not an industrial forklift, safety-rated AMR, or certified material-handling system.
 
-The autonomous forklift system combines:
-- **Hardware Architecture**: Raspberry Pi + Arduino Mega dual-processor control system
-- **Navigation System**: Infrared line-sensor based path following with 6-sensor array
-- **Vision Processing**: Camera-based QR code detection using OpenCV and ZBar
-- **Actuation**: PWM-controlled DC motors (BTS7960 drivers) and servo-driven fork-lifter
-- **Safety Mechanisms**: State-locking to prevent duplicate station triggers
+---
 
-**System Architecture**:
+## What the robot does
 
+The robot uses two controllers with separate responsibilities:
+
+- **Raspberry Pi 4B:** USB-camera image acquisition, QR detection/decoding, route-command generation.
+- **Arduino Mega 2560:** IR line following, motor control, T-junction handling, fork-servo control, station detection, calibration, and mission state.
+
+A QR code contains only one route character:
+
+| QR content | Action at outbound T-junction |
+|---|---|
+| `l` | Turn left |
+| `r` | Turn right |
+
+On the return trip, the Arduino automatically uses the opposite turn so the robot can return to the pickup branch.
+
+---
+
+## System overview
+
+```mermaid
+flowchart LR
+    CAM[USB Camera] --> PI[Raspberry Pi 4B\nOpenCV + pyzbar]
+    PI -- "UART: l / r @ 9600 baud" --> MEGA[Arduino Mega 2560]
+
+    IR[6-channel IR sensor array] --> MEGA
+    MEGA --> LEFT[BTS7960\nLeft drive]
+    MEGA --> RIGHT[BTS7960\nRight drive]
+    LEFT --> LM[2 × left DC motors]
+    RIGHT --> RM[2 × right DC motors]
+    MEGA --> SERVO[Forklift servo]
+
+    BAT[3S LiPo battery] --> POWER[Power distribution\n+ buck converters]
+    POWER --> PI
+    POWER --> MEGA
+    POWER --> LEFT
+    POWER --> RIGHT
+    POWER --> SERVO
 ```
-┌─────────────────────────────────────────────────────┐
-│    Raspberry Pi (High-Level Vision & Logic)          │
-│  - QR Code Detection (OpenCV + ZBar)                 │
-│  - Route Decision Processing                         │
-│  - Serial Command Transmission (9600 baud)           │
-└──────────────────┬──────────────────────────────────┘
-                   │ Serial Port (/dev/ttyS0)
-┌──────────────────┴──────────────────────────────────┐
-│   Arduino Mega (Real-Time Motor & Sensor Control)    │
-│  - Line Following (6x IR Sensors on Analog A0-A5)    │
-│  - Motor Control (2x BTS7960 Drivers)                │
-│  - Servo Actuation (Fork Lift, Pin 5)                │
-│  - Debug Output (USB Serial @ 115200 baud)           │
-└─────────────────────────────────────────────────────┘
+
+The Raspberry Pi does not directly drive the motors. It sends the decoded route to the Arduino, while the Arduino handles real-time movement and station/junction behavior.
+
+---
+
+## Mission flow
+
+The following flow matches the current QR-based firmware logic.
+
+```mermaid
+flowchart TD
+    A[Power on] --> B[Arduino loads saved IR calibration from EEPROM]
+    B --> C[Start Raspberry Pi QR scanner]
+    C --> D[Start Arduino line-following mode]
+    D --> E[Follow line to pickup station]
+    E --> F[Pickup station detected]
+    F --> G[Lift box]
+    G --> H[5 s settle / QR scan window]
+    H --> I[Fixed pickup-station U-turn]
+    I --> J[Follow line toward T-junction]
+
+    J --> K{Valid QR route received?}
+    K -- No --> L[Stop at junction and wait]
+    L --> K
+    K -- l --> M[Turn left]
+    K -- r --> N[Turn right]
+
+    M --> O[Follow line to target station]
+    N --> O
+    O --> P[Drop box]
+    P --> Q[Set return state + reverse briefly]
+    Q --> R[5 s settle pause]
+    R --> S[Fixed drop-station U-turn]
+    S --> T[Follow line back to T-junction]
+    T --> U[Turn opposite to saved outbound route]
+    U --> V[Return to pickup station]
+    V --> W[Clear old route and start next cycle]
+    W --> G
 ```
 
-## Repository Structure
+The firmware runs continuously until the robot is stopped or powered off; there is no automatic mission `End` state in the current Arduino loop.
 
+---
+
+## Suggested track layout
+
+```text
+                 LEFT DROP STATION
+                        |
+                        |
+RIGHT DROP STATION -----+----- LEFT/RIGHT BRANCH
+                        |
+                    T-JUNCTION
+                        |
+                        |
+                  PICKUP / HOME
 ```
+
+For the current sensor logic, the track geometry matters:
+
+- Normal guided line: usually one or two sensors active.
+- Full T-junction region: all six sensors can become active.
+- Pickup/drop station: all six sensors read the station background long enough to trigger the station routine.
+
+The current firmware treats an all-clear sensor condition as a station after approximately 350 ms, so a completely lost line can also resemble a station. Keep the station geometry consistent and test the track before running at full speed.
+
+---
+
+## Electrical architecture
+
+```mermaid
+flowchart LR
+    BAT[3S LiPo\n10.5-12.6 V] --> FUSE[Inline fuse]
+
+    FUSE --> LDRV[Left BTS7960]
+    FUSE --> RDRV[Right BTS7960]
+    LDRV --> LMO[2 × left motors in parallel]
+    RDRV --> RMO[2 × right motors in parallel]
+
+    FUSE --> BUCK1[XL4015 step-down\n5.15 V]
+    BUCK1 --> PI[Raspberry Pi 4B\nUSB-C power]
+
+    FUSE --> BUCK2[LM2596 step-down\n5.0 V]
+    BUCK2 --> LOGIC[5 V logic / servo rail]
+    LOGIC --> MEGA[Arduino Mega 2560]
+    LOGIC --> SERVO[Forklift servo]
+
+    CAM[USB webcam] --> PI
+    IR[6-channel IR array] --> MEGA
+
+    PI -- "GPIO14 TXD, header pin 8 → Mega RX1 D19" --> MEGA
+    MEGA -- "TX1 D18 → voltage divider → Pi GPIO15 RXD, header pin 10" --> PI
+
+    MEGA --> LDRV
+    MEGA --> RDRV
+    MEGA --> SERVO
+```
+
+### Detailed circuit diagram
+
+Place the corrected schematic at:
+
+```text
+docs/images/circuit-diagram.png
+```
+
+Then embed it in this README:
+
+```md
+![Autonomous Forklift Circuit Diagram](docs/images/circuit-diagram.png)
+```
+
+**Important:** the circuit diagram must match the firmware. In the current Arduino code, the fork servo signal is **D5**, while **D3** is the push button. Do not publish a schematic that labels the servo as D3.
+
+### Power notes
+
+The current design uses separate regulated positive rails for the Raspberry Pi and 5 V logic/servo supply. Do not tie the **5.15 V** and **5.0 V** positive outputs together. A common ground between the Raspberry Pi, Arduino, motor-driver logic, sensors, and power system is required for UART and control signals.
+
+The Arduino Mega TX pin is a 5 V logic output. Do not connect Mega TX1 directly to the Raspberry Pi RX pin; use the voltage divider or a suitable logic-level shifter shown in the schematic.
+
+---
+
+## Arduino Mega pin map
+
+| Function | Arduino Mega pin | Connection |
+|---|---:|---|
+| Left motor forward PWM | D9 | Left BTS7960 RPWM |
+| Left motor reverse PWM | D8 | Left BTS7960 LPWM |
+| Right motor forward PWM | D12 | Right BTS7960 RPWM |
+| Right motor reverse PWM | D11 | Right BTS7960 LPWM |
+| Fork servo signal | D5 | Servo signal |
+| Start/calibration button | D3 | Button to GND using `INPUT_PULLUP` |
+| IR sensor 1-6 | A0-A5 | 6-channel IR sensor array |
+| UART RX1 | D19 | Raspberry Pi GPIO14/TXD, header pin 8 |
+| UART TX1 | D18 | Through divider/level shifting to Pi GPIO15/RXD, header pin 10 |
+| Ground | GND | Common ground |
+
+---
+
+## Hardware required
+
+| Item | Quantity | Purpose |
+|---|---:|---|
+| Raspberry Pi 4B | 1 | QR vision and high-level route command |
+| Arduino Mega 2560 | 1 | Real-time robot control |
+| USB webcam | 1 | QR image acquisition |
+| 6-channel analog IR sensor array | 1 | Line and junction detection |
+| BTS7960 motor driver | 2 | Left/right drivetrain control |
+| DC geared motors | 4 | Two motors per side |
+| Forklift lifting servo | 1 | Lift/drop mechanism |
+| 3S LiPo battery | 1 | Main power source |
+| XL4015 step-down converter | 1 | Raspberry Pi supply, adjusted to the required output before connection |
+| LM2596 step-down converter | 1 | 5 V logic/servo supply |
+| Inline fuse and holder | 1 | Main battery protection |
+| Voltage divider or logic-level shifter | 1 | Mega TX → Pi RX protection |
+| Push button | 1 | Calibration/run input |
+| Fork/chassis/wheels/hardware | as required | Mechanical assembly |
+
+Exact motor model, wheel diameter, sensor mounting height, chassis dimensions, and fork geometry should be documented in `hardware/` before calling the build fully reproducible.
+
+---
+
+## Recommended repository structure
+
+```text
 Autonomous-Forklift/
-├── Codes/
-│   ├── ArduinoMega.ino
-│   │   Core firmware for real-time motor and sensor control
-│   │
-│   ├── ArduinoMega with safety codes.ino
-│   │   Enhanced version with station re-trigger protection
-│   │
-│   └── RaspberryPi
-│       Python script for QR code detection and serial communication
+├── README.md
+├── LICENSE
+├── CONTRIBUTING.md
 │
-├── Proposal/
-│   └── autonomous_material_handling_robot_proposal_fixed.pdf
-│       Complete project documentation and system specifications
+├── firmware/
+│   └── arduino-mega/
+│       └── AutonomousForklift.ino
 │
-├── CAD/
-│   └── GrabCAD/
-│       Mechanical and electronics reference models
+├── raspberry-pi/
+│   ├── qr_router.py
+│   └── requirements.txt
 │
-└── README.md (this file)
+├── docs/
+│   ├── images/
+│   │   ├── robot-overview.jpg
+│   │   ├── circuit-diagram.png
+│   │   ├── system-process-flow.png
+│   │   └── track-layout.png
+│   ├── CALIBRATION.md
+│   └── TROUBLESHOOTING.md
+│
+├── hardware/
+│   ├── BOM.csv
+│   ├── circuit/
+│   └── CAD/
+│
+├── qr-codes/
+│   ├── left.png
+│   └── right.png
+│
+├── demo/
+│   └── QARGO-demo.mp4
+│
+├── simulation/
+│   └── simulation.py
+│
+└── proposal/
+    └── autonomous_material_handling_robot_proposal_fixed.pdf
 ```
 
-## Code Guidelines
-
-### Arduino Mega: Real-Time Control Layer
-
-#### ArduinoMega.ino - Core Firmware
-
-**Purpose**: Primary firmware for real-time control of motors, sensors, and servo actuation.
-
-**Key Functions**:
-
-| Function | Purpose |
-|----------|---------|
-| `setup()` | Initialize GPIO pins, load EEPROM calibration, establish serial connections (USB debug at 115200 baud, Raspberry Pi at 9600 baud) |
-| `line_follow()` | Main control loop that reads IR sensors, computes robot position relative to line, and adjusts motor speeds accordingly |
-| `motor(int a, int b)` | PWM motor control via BTS7960 drivers; accepts values from -255 to +255 (negative = reverse, zero = stop) |
-| `reading()` | Converts 6 analog IR sensor readings into binary pattern; computes position offset for steering corrections |
-| `cal()` | Calibration routine executed on startup; sweeps motors across track while recording minimum and maximum sensor values to EEPROM |
-| `lift_box()` / `drop_box()` | Servo commands to raise (0 degrees) or lower (180 degrees) the fork mechanism |
-| `brake()` | Applies emergency reverse thrust then coasts to stop for safe deceleration |
-| `serial_read_pi()` | Non-blocking serial receive function that decodes 'l' (left) or 'r' (right) commands from Raspberry Pi |
-
-**Pin Configuration**:
-
-```
-Motor Control (BTS7960 Drivers):
-  Pin 8   (PWM) = Left Motor Backward
-  Pin 9   (PWM) = Left Motor Forward
-  Pin 11  (PWM) = Right Motor Backward
-  Pin 12  (PWM) = Right Motor Forward
-
-Servo Actuator:
-  Pin 5   (PWM) = Fork Lift (0 degrees = up, 180 degrees = down)
-
-Sensors:
-  Analog A0-A5 = 6x IR Line Sensors
-
-Control Input:
-  Pin 3 = Calibration/Run Button (INPUT_PULLUP to GND)
-
-Serial Connections:
-  USB = Debug output (Serial, 115200 baud)
-  Pin 18 (TX1) = Transmit to Raspberry Pi
-  Pin 19 (RX1) = Receive from Raspberry Pi (9600 baud)
-```
-
-**Sensor Fusion Algorithm**:
-
-The robot converts 6 analog sensor readings into a binary 6-bit pattern:
-
-```
-Sensor pattern: 0b001100 (example)
-                  ^^^^^^
-                  ||||||_ Leftmost sensor (bit 0)
-                  |||||__ ...
-                  ||||___ ...
-                  |||____ Center-left
-                  ||_____ Center-right
-                  |______ Rightmost sensor (bit 5)
-
-Position tracking:
-  - pos = 0: Robot centered on line
-  - pos = +4: Robot drifting right (increase left motor speed)
-  - pos = -4: Robot drifting left (increase right motor speed)
-```
-
-**State Machine**:
-
-The robot operates in distinct states:
-
-```
-flag variable (line following direction):
-  's' = Straight line ahead
-  'l' = Detected left-side line branch
-  'r' = Detected right-side line branch
-
-cross variable (junction status):
-  's' = No junction detection
-  'l' / 'r' = Awaiting QR code decision at intersection
-
-box_loaded: Boolean flag
-  false = Empty (proceed to pickup station)
-  true = Carrying box (proceed to drop station)
-
-returning: Boolean flag
-  false = Initial outbound route
-  true = Return journey (route reversed)
-```
-
-**Operational Sequence**:
-
-1. **Initialization**: Button press count determines mode
-   - Press once: Enter calibration mode
-   - Press twice: Enter autonomous line-following mode
-
-2. **Line Following**: Continuous loop reading sensors and adjusting motor output
-
-3. **Junction Detection**: When 6 sensors detect full black area (sum == 6)
-   - Motors stop
-   - Arduino waits for serial command from Raspberry Pi
-   - Receives 'l' or 'r', sets turning direction
-
-4. **Station Detection**: When sensors detect white area (sum == 0) while centered
-   - 350ms timeout to confirm station arrival
-   - Lifts box (if empty) or drops box (if loaded)
-   - 5-second settle pause
-   - Performs U-turn and resumes line following
-
-5. **Calibration Mode**: Motor sweeps track while recording sensor bounds
-   - Values stored to EEPROM (survives power cycles)
-   - Must be run on new track or after sensor maintenance
-
-**Tunable Parameters**:
-
-```cpp
-// Timing (milliseconds)
-#define node_delay 200        // Pause at junction before moving
-#define u_turn_delay 350      // Detection threshold for white station
-#define u_turn_pause 5000     // Settle time after box pickup/drop
-#define brake_time 50         // Deceleration duration
-#define turn_brake 80         // Brake pause during line recovery after turn
-
-// Motor speed multipliers (adjust for track conditions)
-float spl = 8;                // Left motor output multiplier
-float spr = 8;                // Right motor output multiplier
-```
-
-**Tuning Guidelines**:
-
-| Symptom | Cause | Adjustment |
-|---------|-------|------------|
-| Too fast on curves | Overshoot and line loss | Decrease `spl`/`spr` to 6-7 |
-| Too slow overall | Insufficient motor power | Increase `spl`/`spr` to 10-12 |
-| Misses junctions | Timeout too short | Increase `u_turn_delay` |
-| Jerky motion at turns | Brake duration too short | Increase `turn_brake` to 100-150 |
-| Drifts in turns | Motor imbalance | Adjust `spl` and `spr` ratio independently |
+This layout separates the tested firmware, Raspberry Pi software, documentation, hardware files, QR assets, and demonstration media so a new builder can find each part without searching through experimental versions.
 
 ---
 
-#### ArduinoMega with safety codes.ino - Enhanced Safety Version
+# Replication guide
 
-**Improvements Over Core Version**:
+## 1. Build the mechanical platform
 
-The safety-enhanced variant adds protection against duplicate station processing:
+Assemble the chassis with two drive motors on the left and two on the right. The two motors on each side are driven together, creating differential-drive steering.
 
-**Key Addition**: Station Re-Trigger Lock
+Mount the fork servo so that the mechanical end positions match the firmware:
 
 ```cpp
-bool station_locked = false;           // Flag: station currently processing
-uint32_t station_line_since = 0;       // Timestamp of normal line detection
-#define station_unlock_time 250        // ms required on normal line to unlock
+forklift.write(180);  // fork down
+forklift.write(0);    // fork up
 ```
 
-**How It Works**:
+Before powering the servo, verify that these angles do not force the linkage beyond its mechanical limits.
 
-1. When station action begins (box pickup/drop), `station_locked` is set to true
-2. Robot performs U-turn and returns to line following
-3. If sensors briefly detect white again (sensor noise or wide station), station will NOT re-trigger
-4. Once robot follows normal black line continuously for 250ms, `station_locked` is reset
-5. Robot is then ready for the next station encounter
-
-**When to Use Safety Version**:
-
-- Production environments where missed deliveries cause problems
-- Stations with wide white areas that could cause sensor bounce-back
-- Tracks with reflective surfaces or variable lighting
+Mount the six IR sensors at the front/bottom of the robot with consistent spacing and height. Record the final sensor height and spacing in `hardware/` so other builders can reproduce the same behavior.
 
 ---
 
-### Raspberry Pi: High-Level Vision Processing
+## 2. Wire the electronics
 
-#### RaspberryPi - QR Code Scanner
+Follow the circuit diagram and the pin table above.
 
-**Purpose**: Real-time QR code detection and serial command transmission to Arduino.
+Before connecting the Raspberry Pi or Arduino:
 
-**System Requirements**:
+1. Set the XL4015 output with a multimeter.
+2. Set the LM2596 output with a multimeter.
+3. Verify polarity.
+4. Verify that the Pi and logic positive rails are not accidentally connected together.
+5. Verify common ground.
+6. Verify the Mega TX → Pi RX level reduction.
+7. Check for shorts before connecting the battery.
 
-```
-Hardware:
-  - Raspberry Pi 3/4/5
-  - USB camera or CSI ribbon camera
-  - Serial connection to Arduino Mega (UART or USB adapter)
+Do not tune buck-converter output while sensitive electronics are connected.
 
-Software:
-  - Python 3.7+
-  - opencv-python: Video capture and frame display
-  - pyzbar: ZBar QR decoder library
-  - pyserial: Serial communication
-  - numpy: Array operations
+---
 
-Installation:
-  sudo apt update
-  sudo apt install python3-pip
-  pip install opencv-python pyzbar pyserial numpy
-```
+## 3. Upload the Arduino firmware
 
-**Program Flow**:
+Open the tested firmware in the Arduino IDE.
 
-```
-Initialize:
-  1. Open serial port (/dev/ttyS0 @ 9600 baud)
-  2. Initialize camera (index 0)
-  3. Set anti-spam timer (0.3 second minimum between sends)
+Recommended location:
 
-Main Loop:
-  1. Capture frame from camera
-  2. Decode all QR codes in frame using ZBar
-  3. For each detected code:
-     - Extract text data (should be 'l' or 'r')
-     - Draw bounding rectangle around QR code
-     - Overlay decoded text on frame
-     - If data is 'l' or 'r' and not spam: transmit to Arduino
-  4. Display annotated video feed
-  5. Check for 'q' key to exit
-
-Cleanup:
-  - Release camera
-  - Close video window
-  - Close serial port
+```text
+firmware/arduino-mega/AutonomousForklift.ino
 ```
 
-**Code Organization**:
+Select:
 
-| Section | Role |
-|---------|------|
-| Serial Configuration | Define port and baud rate (adjustable for different systems) |
-| Camera Initialization | Create video capture object from camera device |
-| Main Loop | Continuous frame capture and processing |
-| QR Detection | Use pyzbar to decode barcodes in frame |
-| Serial Send Logic | Validate data, apply anti-spam filter, transmit character |
-| Display Output | Draw QR boxes and text, show frame in window |
+```text
+Board: Arduino Mega or Mega 2560
+Processor: ATmega2560
+```
 
-**Anti-Spam Mechanism**:
+Upload the sketch.
+
+The firmware uses the standard Arduino `EEPROM` and `Servo` libraries.
+
+For debugging, open the USB Serial Monitor at:
+
+```text
+115200 baud
+```
+
+The Raspberry Pi communicates separately with `Serial1` at:
+
+```text
+9600 baud
+```
+
+---
+
+## 4. Prepare the Raspberry Pi
+
+The current vision program requires Python 3, OpenCV, NumPy, `pyzbar`, `pyserial`, and the ZBar runtime.
+
+On Raspberry Pi OS:
+
+```bash
+sudo apt update
+sudo apt install -y python3-opencv python3-venv libzbar0
+
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install numpy pyzbar pyserial
+```
+
+Enable the Raspberry Pi UART:
+
+```bash
+sudo raspi-config
+```
+
+In the serial-port settings:
+
+```text
+Login shell over serial: No
+Serial hardware enabled: Yes
+```
+
+Then reboot:
+
+```bash
+sudo reboot
+```
+
+If the user does not have serial-port permission:
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+Log out/reboot after changing group membership.
+
+The current Python program uses:
 
 ```python
-last_sent = None              # Previously transmitted command
-last_send_time = 0            # Timestamp of last send
-SEND_INTERVAL = 0.3           # Minimum seconds between sends
-
-Logic:
-  if (command != last_sent) OR (time_since_last_send > SEND_INTERVAL):
-    send to Arduino
-    update timestamp
-  else:
-    skip (prevent repeated 'r' sends within 0.3 seconds)
+SERIAL_PORT = "/dev/ttyS0"
+BAUD_RATE = 9600
 ```
 
-**Expected Output**:
+If your Pi exposes the UART under another device such as `/dev/serial0`, update `SERIAL_PORT` accordingly.
 
+---
+
+## 5. Connect and test the camera
+
+The current script opens camera index `0`:
+
+```python
+cap = cv2.VideoCapture(0)
 ```
-Starting QR Code Scanner with ZBar... Press 'q' to quit.
-Data found: r
-Sent to Arduino: r
-Data found: r
-  (skipped - within SEND_INTERVAL)
+
+Connect the USB webcam and confirm that it appears as the expected video device.
+
+The script displays a live OpenCV window. If you run the Raspberry Pi headless, modify the script to remove or disable the GUI calls (`cv2.imshow()` / keyboard window handling).
+
+---
+
+## 6. Prepare the QR codes
+
+The route QR must contain exactly one useful command:
+
+```text
+l
+```
+
+or
+
+```text
+r
+```
+
+The Python script converts input to lowercase and ignores any decoded string other than `l` or `r`.
+
+For a reproducible repository, include ready-to-print QR images in:
+
+```text
+qr-codes/left.png
+qr-codes/right.png
+```
+
+Place the QR on the box where the pickup-station camera can read it reliably during the stationary pickup period.
+
+---
+
+## 7. Calibrate the IR sensors
+
+Calibration values are stored in Arduino EEPROM and loaded at startup.
+
+The current button behavior is:
+
+| Button action | Firmware mode |
+|---|---|
+| One press | Calibrate IR array |
+| Quick double press | Start line following |
+
+During calibration, the robot rotates while sampling each IR channel. Make sure the sensor array sees both the line and the background during this process.
+
+Recalibrate whenever you change:
+
+- Track material or color
+- Lighting conditions
+- Sensor height
+- Sensor angle
+- IR module
+
+---
+
+## 8. Run the Raspberry Pi program
+
+From the repository root:
+
+```bash
+source .venv/bin/activate
+python raspberry-pi/qr_router.py
+```
+
+Expected terminal output includes messages similar to:
+
+```text
+Starting QR Code Scanner with ZBar...
 Data found: l
 Sent to Arduino: l
 ```
 
-**Serial Port Troubleshooting**:
-
-| System | Port to Try |
-|--------|------------|
-| Raspberry Pi UART | `/dev/ttyS0` (hardware UART) or `/dev/ttyAMA0` (GPIO 14/15) |
-| USB Serial Adapter | `/dev/ttyUSB0` or `/dev/ttyUSB1` |
-| Arduino Serial Emulation | `/dev/ttyACM0` |
-
-**Verify Connection**:
-
-```bash
-# List available serial ports
-ls -la /dev/tty*
-
-# Test communication (should show ARDUINO READY)
-cat /dev/ttyS0
-```
-
-**Common Issues**:
-
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| Camera not found | No camera device attached | `ls /dev/video*` to verify |
-| QR not decoding | Poor image quality | Improve lighting, adjust camera focus, ensure stable QR size 5-15cm |
-| Serial timeout | Wrong port or baud rate | Verify `SEND_INTERVAL` setting and port configuration |
-| Permission denied | Serial port access | Run with `sudo` or add user to `dialout` group: `sudo usermod -a -G dialout $USER` |
-| Repeated same command | Anti-spam too aggressive | Reduce `SEND_INTERVAL` to 0.1-0.2 seconds |
+The Raspberry Pi sends a single `l` or `r` character through UART. The current script applies a 0.3 s anti-spam interval before resending the same command.
 
 ---
 
-## System Architecture Details
+## 9. Start the robot
 
-### Guided Navigation Subsystem
+Recommended startup sequence:
 
-**Objective**: Follow black line on white floor with autonomous turning at junctions.
+1. Place the robot on the track with the fork down.
+2. Place a box at the pickup station with a readable `l` or `r` QR code.
+3. Power the robot.
+4. Start the Raspberry Pi QR program.
+5. Confirm camera detection.
+6. Confirm Arduino debug output if using the Serial Monitor.
+7. Quick double-press the Arduino control button to start line following.
+8. Keep a physical power disconnect accessible during testing.
 
-**Sensor Array**: 6 infrared line sensors arranged horizontally
-- Analog readings (0-1023) converted to binary (black = 0, white = 1)
-- Calibration determines threshold for each sensor
-- Fusion creates 6-bit pattern for position estimation
+Expected mission:
 
-**Algorithm**:
-
-```
-Straight Line (2-4 sensors active):
-  - Smooth proportional motor adjustment
-  - Example: sensor pattern 0b001100 (center) -> equal motor speeds
-  - Example: sensor pattern 0b000110 (right-shifted) -> reduce right motor
-
-Junction Detection (all 6 sensors active):
-  - Full black area indicates multi-way intersection
-  - Stop motors, wait for QR command
-  - Apply appropriate turning corrections
-
-Station Detection (no sensors active):
-  - White area with centered approach (pos near 0)
-  - Trigger pickup/drop action after 350ms confirmation
-  - Prevents false triggers from shadows or isolated white patches
-```
-
-### Vision Decision Layer
-
-**Objective**: Provide real-time routing decisions at junctions using QR codes.
-
-**Input**: QR code data (single character: 'l' or 'r')
-
-**Processing**:
-
-```
-At each junction:
-  1. Arduino detects full-black intersection
-  2. Raspberry Pi captures video frame
-  3. ZBar library locates and decodes QR code
-  4. Extracted data 'l' or 'r' sent to Arduino via serial
-  5. Arduino applies turning logic based on state:
-     - Outbound route: turn as specified by QR
-     - Return route: turn opposite direction (coming back)
-```
-
-**Advantages Over Color Sensing**:
-
-- Unambiguous: 'l' and 'r' are clear instructions
-- Robust: Works in varied lighting (compared to color detection)
-- Flexible: Can encode additional information if needed
-- No learning curve: QR is globally recognized standard
-
-### Motor Control Subsystem
-
-**Hardware**: Two independent 12V DC motors via BTS7960 H-bridge drivers
-
-**Control Method**: PWM (Pulse Width Modulation)
-
-```
-BTS7960 Pin Assignment:
-  RPWM (Forward):  Arduino pin 9 (left), pin 12 (right)
-  LPWM (Backward): Arduino pin 8 (left), pin 11 (right)
-
-PWM Values:
-  0    = Motors stopped
-  1-127 = Reduced speed
-  128-255 = Full speed
-  Negative in code = automatic reverse direction mapping
-```
-
-**Speed Control Logic**:
-
-```cpp
-// Motor speeds vary based on line position
-if (sensor == 0b001100) {
-  motor(10 * spl, 10 * spr);    // Centered: straight ahead
-}
-else if (sensor == 0b000100) {
-  motor(10 * spl, 9 * spr);     // Slightly right: slow right motor
-}
-else if (sensor == 0b000011) {
-  motor(10 * spl, 0 * spr);     // Far right: only left motor forward
-}
-// ... 12 total patterns for smooth steering
-```
-
-### Servo Actuation Subsystem
-
-**Hardware**: Standard servo motor on Pin 5, 180-degree rotation range
-
-**Fork Positions**:
-
-```
-Servo Angle 0°   = Fork fully raised (pickup position)
-Servo Angle 180° = Fork fully lowered (drop position)
-
-Action Sequence:
-  1. Approach station, centered stop
-  2. If empty (box_loaded = false): servo to 0°, wait 1 second (lift)
-  3. If loaded (box_loaded = true): servo to 180°, wait 1 second (drop)
-  4. Additional 5-second pause for box to settle
-  5. Resume line following
+```text
+Pickup/Home
+   ↓
+Lift box
+   ↓
+Read QR route
+   ↓
+T-junction
+   ├── l → Left target
+   └── r → Right target
+   ↓
+Drop box
+   ↓
+Return using opposite junction turn
+   ↓
+Pickup/Home
+   ↓
+Repeat
 ```
 
 ---
 
-## Operating Instructions
+## Serial protocol
 
-### Calibration Procedure
+### Raspberry Pi → Arduino
 
-**Objective**: Record sensor response thresholds for current lighting conditions.
+| Data | Meaning |
+|---|---|
+| `l` | Select left target for current outbound delivery |
+| `r` | Select right target for current outbound delivery |
 
-**Steps**:
+The Arduino also accepts uppercase `L` and `R` and normalizes them internally.
 
-1. Place robot on black track at any location
-2. Power on Arduino Mega
-3. Press calibration button ONCE
-4. Robot will rotate clockwise in place for 5 seconds
-5. Watch Serial Monitor for progress
-6. Robot stops automatically when complete
-7. Sensor thresholds stored in EEPROM
+### Arduino → Raspberry Pi
 
-**Expected Output**:
+After accepting a valid command, the Arduino sends an acknowledgement similar to:
 
-```
-1023 512 256    (max, mid, min for sensor 0)
-1024 511 255    (max, mid, min for sensor 1)
-...
+```text
+ACK l
 ```
 
-### Autonomous Operation
+or
 
-**Prerequisites**:
-- Calibration completed
-- Track laid out with black lines on white floor
-- QR codes placed at all junctions (containing 'l' or 'r')
-- Raspberry Pi script running with camera connected
+```text
+ACK r
+```
 
-**Steps**:
-
-1. Power on Raspberry Pi first (wait for boot, ~30 seconds)
-2. Start Raspberry Pi script: `python RaspberryPi`
-3. Power on Arduino Mega
-4. Verify both show "READY" in respective terminals
-5. Press Arduino button TWICE to start autonomous mode
-6. Robot will proceed with mission:
-   - Follow black line to first station
-   - Lift box
-   - Follow line to first junction
-   - Wait for QR code decision
-   - Execute turn and continue
-   - Arrive at drop station
-   - Lower box
-   - Return on same route (reversed)
-   - Repeat
-
-**Monitoring**:
-
-- Arduino USB terminal shows real-time state and debug messages
-- Raspberry Pi terminal displays QR code detections
-- Use `DEBUG_SERIAL` flag (1 = verbose, 0 = silent) to control Arduino output verbosity
+The current Raspberry Pi script does not yet use this acknowledgement for closed-loop command confirmation; it is available for future reliability improvements.
 
 ---
 
-## Expected Robot Behavior
+## Important firmware behavior
 
-| Scenario | Expected Response | Duration |
-|----------|-------------------|----------|
-| Powering on | Servo moves to down position, confirms READY | 2 seconds |
-| Button press (calibration) | Rotates in place, records sensor values | 5 seconds |
-| Robot on black line | Smooth forward motion with micro-corrections | Continuous |
-| Drifting off line | Gradual speed adjustment to steer back | 0.5-1.0 seconds |
-| Approaching station | Deceleration, gradual stop | 2-3 seconds |
-| At pickup station | Box lifted, 5-second pause, U-turn left | 7 seconds |
-| At drop station | Box lowered, 5-second pause, U-turn right | 7 seconds |
-| At junction without QR | Motors stop, waiting (blocking) | Until QR arrives |
-| At junction with 'r' QR | Turn right after processing | 2-3 seconds |
-| Serial connection lost | Last command continues; no new decisions | Continuous |
+The Arduino keeps several mission states:
 
----
+| State | Purpose |
+|---|---|
+| `side` | Saved QR route for the current box |
+| `route_received` | Confirms that a usable route exists |
+| `box_loaded` | Distinguishes pickup from drop station behavior |
+| `returning` | Distinguishes outbound and return routing |
+| `station_locked` | Prevents the same station from triggering twice while the robot is leaving it |
 
-## Mechanical Components (CAD Reference)
+At an outbound junction, the robot uses the saved QR route. During the return trip, the same route is kept but reversed logically:
 
-The `CAD/GrabCAD/` directory contains reference models for:
+```text
+Outbound l → Return r
+Outbound r → Return l
+```
 
-**Electronics**:
-- Raspberry Pi 3/4/5 with GPIO header layout
-- Arduino Mega 2560 with pin assignments
-- BTS7960 H-bridge motor driver modules
-- Standard servo motor dimensions
-- 12V DC motor specifications
-
-**Mechanics**:
-- Wheel assemblies (diameter, axle diameter, mounting holes)
-- Motor coupling and gearbox arrangements
-- Fork-lifter linkage and servo attachment points
-- IR sensor mounting brackets
-- Frame and chassis structure
-
-**Use Case**: Sizing components, checking clearances, planning wire routing and structural integration.
+When the robot physically reaches the pickup station again, the old route is cleared so the next box can provide a new QR command.
 
 ---
 
-## Proposal Document Reference
+## Main tuning parameters
 
-The `Proposal/autonomous_material_handling_robot_proposal_fixed.pdf` provides comprehensive project documentation:
+These values are in the Arduino firmware and may need adjustment for another chassis or track.
 
-**Sections**:
+| Parameter | Current value | Function |
+|---|---:|---|
+| `node_delay` | 200 ms | Junction transition delay |
+| `u_turn_delay` | 350 ms | Time required before an all-clear region is accepted as a station |
+| `u_turn_pause` | 5000 ms | Station settling / QR-reading pause |
+| `brake_time` | 50 ms | Active braking duration |
+| `turn_brake` | 80 ms | Turn correction braking |
+| `station_unlock_time` | 250 ms | Stable normal-line time before the same station can trigger again |
+| `spl` | 8 | Left motor speed scale |
+| `spr` | 8 | Right motor speed scale |
 
-1. Abstract and Objectives
-   - Mission statement and success criteria
-   - Target performance metrics
-
-2. System Architecture Overview
-   - Block diagrams showing all subsystems
-   - Data flow and control sequences
-   - Timing requirements
-
-3. Hardware Bill of Materials
-   - Complete component list with specifications
-   - Supplier information and costs
-   - Power budget and voltage requirements
-
-4. Software Architecture
-   - Module interaction diagrams
-   - Serial protocol specification
-   - State machine definitions
-
-5. Risk Analysis and Mitigation
-   - Identified failure modes (sensor noise, motor slip, QR decode errors)
-   - Proposed solutions and contingencies
-   - Testing recommendations
-
-6. Expected Outcomes
-   - Success metrics and validation tests
-   - Performance benchmarks
-
-7. Future Enhancement Scope
-   - Multi-color product classification
-   - Advanced obstacle detection and avoidance
-   - Machine learning for improved path planning
-   - Wireless remote monitoring
-
-**Recommendation**: Review the Proposal first for system-level context before diving into code implementation.
+Do not copy these tuning values blindly to a robot with different motors, wheel diameter, battery voltage, mass, sensor spacing, or track geometry.
 
 ---
 
-## Troubleshooting Guide
+## Troubleshooting
 
-### Electrical Issues
-
-**Robot does not power on**:
-- Verify battery voltage (12V nominal)
-- Check power connections to motor drivers and Arduino
-- Test with multimeter: Arduino should show 5V on VCC
-
-**Arduino not communicating with Raspberry Pi**:
-- Verify UART pins (18, 19) connected and GND linked
-- Confirm voltage divider on RX line (3.3V logic on Pi, 5V on Arduino)
-- Test: Connect to Arduino serial monitor, type 'l' or 'r', should see echo
-- Test: Run `cat /dev/ttyS0` on Pi, check incoming data
-
-**No USB debug output**:
-- Verify USB cable connected to Arduino
-- Select correct COM port in Arduino IDE
-- Check baud rate (115200)
-- Try different USB port on computer
-
-### Sensor and Navigation Issues
-
-**Robot spins in circles**:
-- Run calibration procedure again (sensors may have drifted)
-- Check for debris on sensor lenses; clean with soft cloth
-- Verify track contrast (black line must be dark, floor must be light)
-- Adjust lighting to eliminate shadows
-
-**Robot overshoots turns**:
-- Increase `turn_brake` value (80 -> 100-150)
-- Reduce `spl` and `spr` values (8 -> 6)
-- Check wheel traction; ensure wheels roll freely
-
-**Robot misses junctions**:
-- Increase `u_turn_delay` (350 -> 500-600)
-- Verify track geometry: black area at junction must be solid
-- Check for gaps in black line near junction
-
-**Robot stops mid-route without reaching station**:
-- Verify floor is reasonably level (slopes cause drift)
-- Check motor cables for loose connections
-- Monitor current draw; verify power supply can handle load
-- Reduce speed multipliers and try again
-
-### Vision and QR Code Issues
-
-**Camera not detected**:
-- Run `ls /dev/video*` to verify camera device exists
-- Try different camera index (0, 1, 2) in `cap = cv2.VideoCapture(N)`
-- Ensure USB camera has power; check device manager
-
-**QR codes not detected**:
-- Ensure QR code contains only 'l' or 'r' (single character)
-- Verify QR size: too small (<3cm) or too large (>20cm) won't decode
-- Improve lighting; position camera 5-15cm from code
-- Test with standard QR code generator online
-- Run with debug output to see frame display
-
-**Serial commands not reaching Arduino**:
-- Verify serial port setting in code (`/dev/ttyS0` vs `/dev/ttyUSB0`)
-- Run: `stty -F /dev/ttyS0 speed` to confirm 9600 baud
-- Check permission: `ls -la /dev/ttyS0` (should be readable/writable)
-- Test manually: `echo "l" > /dev/ttyS0`
-
-**Repeated commands being sent**:
-- Increase `SEND_INTERVAL` (0.3 -> 0.5 seconds)
-- Verify debounce logic in Raspberry Pi script
-- Check for QR code in camera feed for extended time
-
-### Performance Tuning
-
-**Too slow**:
-- Increase `spl` and `spr` (8 -> 10, then 12 if needed)
-- Reduce `turn_brake` (80 -> 50) for quicker recovery
-- Verify motor power supply voltage (should be 12V)
-
-**Too fast or jerky**:
-- Decrease `spl` and `spr` (8 -> 6, then 4 if needed)
-- Increase `brake_time` and `turn_brake` for smoother transitions
-- Smooth out tuning by using fractional multipliers (e.g., 7.5)
-
-**Inconsistent behavior**:
-- Ensure consistent track lighting and surface (reflectance)
-- Calibrate sensors with track in normal operating position
-- Monitor battery voltage; performance drops as battery drains
-- Check for loose wiring causing intermittent contact
+| Problem | Check |
+|---|---|
+| Robot stops at the T-junction | No valid `l/r` route may have reached the Arduino. Check QR detection, UART, baud rate, and common ground. |
+| Pi detects QR but Arduino shows no command | Check Pi TX → Mega RX1 D19, serial device path, permissions, and 9600 baud. |
+| Raspberry Pi RX is damaged/unreliable | Confirm Mega TX1 is not connected directly to Pi RX; use level reduction. |
+| Robot turns opposite to expected direction | Check left/right motor wiring, motor polarity, and physical branch orientation. |
+| Line following oscillates | Recalibrate IR sensors; check sensor height; reduce speed or retune `spl/spr`. |
+| Robot treats a lost line as a station | Improve track geometry/alignment; the current station detector uses the all-clear sensor state. |
+| Pickup/drop repeats at the same station | Check station width and line reacquisition. Current firmware includes `station_locked` protection, but the track must still allow a clean exit. |
+| Fork moves the wrong way | Verify linkage and servo endpoints before changing the 0°/180° commands. |
+| Camera does not open | Check USB camera connection and `VideoCapture(0)` device index. |
+| `/dev/ttyS0` permission denied | Add the user to `dialout`, then log out or reboot. |
 
 ---
 
-## Development and Testing Checklist
+## Safety
 
-Before deployment:
+This project switches relatively high motor current and uses a LiPo battery. Treat it as a laboratory prototype.
 
-- [ ] Mechanical assembly complete and tested (wheels roll freely, servo moves)
-- [ ] Electrical connections verified (all 5V and 12V lines correct)
-- [ ] Arduino code uploaded without errors
-- [ ] Calibration procedure successful; EEPROM populated
-- [ ] Test track set up with black line and white floor
-- [ ] QR codes generated and positioned at junctions
-- [ ] Raspberry Pi script tested with camera feed visible
-- [ ] Serial communication tested between Pi and Arduino
-- [ ] Robot follows straight line smoothly
-- [ ] Robot detects and stops at station (white area)
-- [ ] Robot performs U-turn correctly
-- [ ] Robot turns left/right at junctions based on QR code
-- [ ] Full pickup-classify-drop cycle completed successfully
-- [ ] Return journey retraces path correctly
-- [ ] Multiple mission cycles run without errors
-- [ ] Motor speeds and timing adjusted for consistent performance
+- Use an appropriately selected fuse and wiring gauge.
+- Verify converter output voltage before connecting electronics.
+- Never connect 5 V logic directly into Raspberry Pi GPIO input pins.
+- Keep a fast physical power-disconnect method accessible.
+- Raise the drive wheels off the floor during first motor-direction tests.
+- Secure the battery and exposed high-current terminals.
+- Do not operate near people, stairs, traffic, or valuable equipment during tuning.
+- Do not use this prototype for real industrial lifting or personnel transport.
+
+The current tested firmware does **not** implement certified obstacle avoidance, emergency-stop logic, localization, or industrial functional safety.
 
 ---
 
-## Version History
+## Known limitations
 
-**Current Version**: Safety-Enhanced (August 2026)
-
-**Previous Features**:
-- Core line-following and motor control
-- Basic QR code junction routing
-- Servo-based box pickup and drop
-
-**Latest Improvements**:
-- Station re-trigger protection (ArduinoMega with safety codes.ino)
-- Enhanced debug output and state visibility
-- Robust junction timeout handling
-- Improved serialization protocol documentation
+- Navigation is line-guided rather than map-based.
+- Route selection currently supports only `l` and `r`.
+- The station detector depends strongly on track geometry and IR calibration.
+- QR decoding assumes the box is visible to the camera at the pickup station.
+- The current Pi script uses a desktop OpenCV window and is not headless by default.
+- Arduino acknowledgements are transmitted but not yet verified by the Pi program.
+- No production-grade obstacle detection or emergency-stop system is implemented in the current control code.
 
 ---
 
-## References and Resources
+## Recommended next improvements
 
-- **Arduino Mega 2560 Datasheet**: https://store.arduino.cc/products/arduino-mega-2560-rev3
-- **BTS7960 Motor Driver Guide**: H-bridge PWM control documentation
-- **ZBar QR Decoder**: http://zbar.sourceforge.net/
-- **OpenCV Documentation**: https://docs.opencv.org/
-- **Raspberry Pi GPIO Reference**: https://www.raspberrypi.org/documentation/
+1. Add ACK-based serial handshaking so the Pi knows the Arduino received the route.
+2. Convert the Arduino mission logic into an explicit finite-state machine.
+3. Add a dedicated emergency-stop input.
+4. Add obstacle detection only after documenting its electrical and software integration.
+5. Add final mechanical drawings with dimensions and tolerances.
+6. Publish exact track dimensions and station/junction geometry.
+7. Include ready-to-print `l` and `r` QR files.
+8. Add a short demonstration GIF near the top of this README.
+9. Add automated Raspberry Pi startup with a `systemd` service after the basic build is stable.
+10. Tag known-good releases so newcomers do not accidentally use experimental firmware.
 
 ---
 
-**Project Status**: Active Development  
-**Last Updated**: August 19, 2026  
-**Contact**: Tajwarbot (GitHub)
+## Contributing
 
-For technical questions, refer to inline code comments and the Proposal PDF for architectural context.
+Issues and pull requests are welcome. When reporting a hardware or navigation problem, include:
+
+- Arduino firmware version/commit
+- Raspberry Pi script version/commit
+- Motor and battery details
+- Sensor-array model
+- Track photo or dimensions
+- Serial Monitor output
+- Raspberry Pi terminal output
+- Short video of the failure when possible
+
+Keep experimental firmware in a separate development branch instead of replacing the last known-good build on `main`.
+
+---
+
+## License
+
+A repository is not fully open source until its reuse terms are explicit. Add a `LICENSE` file before the public release.
+
+A practical option is to license the software separately from the hardware/CAD files, for example:
+
+- Software: MIT License
+- Hardware/CAD: CERN Open Hardware Licence Version 2 – Permissive
+
+Choose the license you actually want before adding license badges or declaring those terms in the repository.
+
+---
+
+## Acknowledgements
+
+Built as an educational mechatronics and autonomous material-handling project using Raspberry Pi, Arduino, computer vision, embedded control, line sensing, and differential-drive motion.
