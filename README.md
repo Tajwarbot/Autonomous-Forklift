@@ -118,6 +118,9 @@ The current firmware treats an all-clear sensor condition as a station after app
 
 ## Electrical architecture
 
+<img width="1091" height="638" alt="circuit diagram" src="https://github.com/user-attachments/assets/a05c39f7-ed41-4b96-8fca-b4fb99926cc6" />
+
+
 ![Autonomous Forklift Circuit Diagram](Proposal/circuit diagram.png)
 
 ### Detailed circuit diagram
