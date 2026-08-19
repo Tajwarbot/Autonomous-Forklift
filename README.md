@@ -148,16 +148,8 @@ flowchart LR
 
 ### Detailed circuit diagram
 
-Place the corrected schematic at:
-
-```text
-docs/images/circuit-diagram.png
-```
-
-Then embed it in this README:
-
 ```md
-![Autonomous Forklift Circuit Diagram](docs/images/circuit-diagram.png)
+![Autonomous Forklift Circuit Diagram](Proposal/circuit diagram.png)
 ```
 
 **Important:** the circuit diagram must match the firmware. In the current Arduino code, the fork servo signal is **D5**, while **D3** is the push button. Do not publish a schematic that labels the servo as D3.
